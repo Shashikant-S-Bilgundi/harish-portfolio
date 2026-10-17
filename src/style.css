@@ -1,0 +1,53 @@
+
+/* =========================================================
+   V2 UPDATES — paste at the very END of style.css
+   Leaner, punchier layout. These rules override earlier ones.
+   ========================================================= */
+
+/* Two-line headlines that never wrap mid-line */
+.line { display: block; white-space: nowrap; }
+
+/* Hero: bigger, bolder */
+.hero__intro-title { max-width: none; font-size: clamp(3.25rem, 9.6vw, 12.5rem); line-height: 0.9; }
+.hero__layout { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+.hero__title { max-width: none; font-size: clamp(2.75rem, 6.2vw, 7.5rem); line-height: 0.92; }
+
+/* Mission: one big statement */
+.mission__statement { max-width: 16ch; font-size: clamp(2.5rem, 6.4vw, 7rem); line-height: 0.94; }
+.mission__body { max-width: 46ch; }
+
+/* Builder reveal */
+.builder__reveal .mega { font-size: clamp(3rem, 9.5vw, 11rem); line-height: 0.9; }
+.builder__reveal .lead { max-width: 36ch; }
+
+/* Motion and visuals strip */
+.strip { padding-top: clamp(72px, 12vh, 140px); }
+.strip__head {
+  display: grid; grid-template-columns: auto minmax(0, 1fr);
+  align-items: end; gap: 10px 32px;
+  margin-bottom: clamp(24px, 4vh, 40px);
+}
+.strip__head .eyebrow { grid-column: 1 / -1; }
+.strip__title {
+  font-family: var(--font-display); font-weight: 600; color: var(--text-hi);
+  font-size: clamp(1.75rem, 3vw, 3rem); line-height: 1; letter-spacing: -0.03em;
+}
+.strip__note { justify-self: end; font-size: 0.9375rem; color: var(--text-low); }
+.strip__viewport {
+  overflow: hidden;
+  -webkit-mask: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+  mask: linear-gradient(90deg, transparent, #000 6%, #000 94%, transparent);
+}
+.strip__track { display: flex; gap: var(--gutter); width: max-content; padding: 6px 0; will-change: transform; }
+.strip .reel, .strip .post { height: clamp(200px, 26vh, 300px); }
+
+/* Mobile */
+@media (max-width: 767px) {
+  .hero__intro-title { font-size: clamp(2.4rem, 9.8vw, 4.5rem); }
+  .hero__title { font-size: clamp(2.4rem, 9.6vw, 4rem); }
+  .mission__statement { font-size: clamp(2.25rem, 10vw, 3.5rem); }
+  .builder__reveal .mega { font-size: clamp(2.25rem, 10vw, 3.5rem); }
+  .strip__head { grid-template-columns: 1fr; }
+  .strip__note { justify-self: start; }
+  .strip .reel, .strip .post { height: 200px; }
+}
