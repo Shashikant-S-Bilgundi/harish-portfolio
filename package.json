@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "frames": "node scripts/make-frames.mjs"
   },
   "dependencies": {
     "gsap": "^3.13.0",
@@ -18,12 +19,11 @@
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "ffmpeg-static": "^5.2.0",
     "typescript": "~5.6.3",
     "vite": "^5.4.11"
   },
-  "description": "This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.",
-  "main": "eslint.config.js",
-  "keywords": [],
+  "description": "Harish Moger portfolio: scroll-scrubbed scenes with GSAP + Lenis",
   "author": "",
   "license": "ISC"
 }

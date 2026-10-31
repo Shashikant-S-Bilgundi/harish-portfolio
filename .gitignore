@@ -22,3 +22,6 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Source videos for `npm run frames` (the frames in public/ are what ship)
+videos

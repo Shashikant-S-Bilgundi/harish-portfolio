@@ -10,7 +10,7 @@ import { Draggable } from 'gsap/Draggable';
 import { InertiaPlugin } from 'gsap/InertiaPlugin';
 import Lenis from 'lenis';
 import 'lenis/dist/lenis.css';
-import { SITE_DATA, CONFIG, PROJECTS, type ResolvedProject, type Reel, type Post } from '../data/siteData';
+import { SITE_DATA, CONFIG, PROJECTS, type ResolvedProject } from '../data/siteData';
 
 gsap.registerPlugin(ScrollTrigger, SplitText, Draggable, InertiaPlugin);
 
@@ -23,22 +23,6 @@ type DragEx = Draggable & { _lx?: number };
 type Cleanup = (() => void) | null | undefined;
 type FieldKey = 'name' | 'email' | 'message';
 type FieldEl = HTMLInputElement | HTMLTextAreaElement;
-type ReelItem = { type: 'reel' } & Reel;
-type PostItem = { type: 'post'; n: number; resolved: string } & Post;
-type MediaItem = ReelItem | PostItem;
-
-interface Loop {
-  track: HTMLElement;
-  speed: number;
-  dir: number;
-  skew: boolean;
-  x: number;
-  half: number;
-  sk: number;
-  paused: boolean;
-  visible: boolean;
-  measure: () => void;
-}
 
 /* =======================================================
    2. HELPERS AND ENVIRONMENT
@@ -63,11 +47,8 @@ const CONN = (navigator as Navigator & { connection?: { saveData?: boolean; effe
 const SAVE_DATA = !!(CONN.saveData || /2g$/.test(CONN.effectiveType || ''));
 const MOBILE_AT_LOAD = isMobile();
 
-let MEDIA: MediaItem[] = [];
 let lenis: Lenis | null = null;
 let heroST: ScrollTrigger | null = null;
-let menuOpen = false;
-let setMenu: (open: boolean) => void = () => {};
 let ADDRESS_DEFAULT = 'harishmoger.design/work';
 let disposers: Array<() => void> = [];
 
@@ -454,18 +435,6 @@ function buildStats(): void {
     </li>`).join('');
 }
 
-function buildMarquee(): void {
-  const items = SITE_DATA.industries.map((t) => `<span class="marquee__item">${esc(t)}</span><i class="marquee__sep"></i>`).join('');
-  const group = (hidden: boolean): string => `<div class="marquee__group"${hidden ? ' aria-hidden="true"' : ''}>${items}${items}</div>`;
-  $('#industryTrack').innerHTML = group(false) + group(true);
-}
-
-function buildHeroThumbs(): void {
-  const wrap = $('#heroThumbs');
-  wrap.innerHTML = PROJECTS.slice(0, 3).map((p) => `<div class="hero__thumb">${thumbImg(p, true)}</div>`).join('');
-  $$('.hero__thumb', wrap).forEach((h, i) => wireThumb(h, PROJECTS[i]));
-}
-
 function buildWork(): void {
   const canvas = $('#workCanvas');
   canvas.innerHTML = PROJECTS.map((p, i) => `
@@ -477,103 +446,6 @@ function buildWork(): void {
       <span class="wcard__name">${esc(p.name)}</span>
     </button>`).join('');
   $$('.wcard', canvas).forEach((card, i) => wireThumb($('.wcard__img', card), PROJECTS[i]));
-
-  $('#workList').innerHTML = PROJECTS.map((p, i) => `
-    <li>
-      <button class="wlist__item" type="button" data-index="${i}">
-        <span class="wlist__num mono">${String(i + 1).padStart(2, '0')}</span>
-        <span class="wlist__name">${esc(p.name)}</span>
-        <span class="wlist__cat mono">${esc(p.category)}</span>
-        <span aria-hidden="true">→</span>
-      </button>
-    </li>`).join('');
-}
-
-function postPlaceholder(i: number, ratio: Post['ratio']): string {
-  const palettes: [string, string][] = [['#7C3AED', '#2E1065'], ['#FF8A4C', '#5B21B6'], ['#C4B5FD', '#16131F'], ['#8B5CF6', '#07060B']];
-  const words = ['Launch', 'Bold', 'Story', 'Craft', 'Grow', 'Glow'];
-  const [a, b] = palettes[i % palettes.length];
-  const h = ratio === '4:5' ? 500 : 400;
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 ${h}">
-    <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></linearGradient></defs>
-    <rect width="400" height="${h}" fill="url(#g)"/>
-    <circle cx="${300 - (i % 3) * 60}" cy="${120 + (i % 4) * 30}" r="${70 + (i % 3) * 20}" fill="rgba(255,255,255,0.12)"/>
-    <text x="32" y="${h - 90}" font-family="Arial, sans-serif" font-weight="700" font-size="56" fill="#F5F3FF" letter-spacing="-2">${words[i % words.length]}</text>
-    <text x="32" y="${h - 44}" font-family="monospace" font-size="15" fill="rgba(245,243,255,0.7)" letter-spacing="3">POST ${String(i + 1).padStart(2, '0')} · PLACEHOLDER</text>
-  </svg>`;
-  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
-}
-
-// One strip that mixes reels and creative posts: reel, post, post, reel…
-function buildStrip(): void {
-  const reels: ReelItem[] = SITE_DATA.reels.map((r): ReelItem => ({ type: 'reel', ...r }));
-  const posts: PostItem[] = SITE_DATA.posts.map((p, i): PostItem => ({ type: 'post', ...p, n: i, resolved: p.src || postPlaceholder(i, p.ratio) }));
-  MEDIA = [];
-  let r = 0, p = 0;
-  while (r < reels.length || p < posts.length) {
-    if (r < reels.length) MEDIA.push(reels[r++]);
-    for (let k = 0; k < 2 && p < posts.length; k++) MEDIA.push(posts[p++]);
-  }
-
-  const tile = (m: MediaItem, i: number, hidden: boolean): string => {
-    const hide = hidden ? ' aria-hidden="true" tabindex="-1"' : '';
-    if (m.type === 'reel') {
-      return `<button class="reel ${m.ratio === '9:16' ? 'reel--tall' : 'reel--wide'}" type="button" data-index="${i}" data-cursor="Play"${hidden ? hide : ` aria-label="Play ${esc(m.title)}"`} style="animation-delay:-${((i % 6) * 1.3).toFixed(1)}s">
-        <video muted playsinline loop preload="none" ${m.poster ? `poster="${m.poster}"` : ''} data-src="${m.src || ''}" aria-hidden="true"></video>
-        ${m.placeholder ? '<span class="reel__tag mono">Placeholder</span>' : ''}
-        <span class="reel__meta"><span class="reel__title">${esc(m.title)}</span><span class="reel__play">Play</span></span>
-      </button>`;
-    }
-    return `<button class="post post--${m.ratio === '4:5' ? 'portrait' : 'square'}" type="button" data-index="${i}" data-cursor="View"${hidden ? hide : ` aria-label="View ${esc(m.alt)}"`}><img src="${m.resolved}" alt="" loading="lazy" decoding="async" draggable="false"></button>`;
-  };
-
-  const track = $('#stripTrack');
-  const html = (hidden: boolean): string => MEDIA.map((m, i) => tile(m, i, hidden)).join('');
-  track.innerHTML = html(false) + html(true);
-
-  $$<HTMLImageElement>('.post img', track).forEach((img) => {
-    img.addEventListener('error', () => {
-      const holder = img.closest<HTMLElement>('.post');
-      const m = MEDIA[Number(holder?.dataset.index)] as PostItem;
-      img.src = postPlaceholder(m.n, m.ratio);
-    }, { once: true });
-  });
-
-  const fallback = (reel: HTMLElement): void => {
-    reel.classList.add('is-fallback');
-    const v = $('video', reel);
-    if (v) v.remove();
-  };
-  const loadReel = (reel: HTMLElement): void => {
-    const v = $<HTMLVideoElement>('video', reel);
-    if (!v || !v.dataset.src) { fallback(reel); return; }
-    v.addEventListener('error', () => fallback(reel), { once: true });
-    v.addEventListener('loadeddata', () => { reel.dataset.ok = '1'; }, { once: true });
-    v.src = v.dataset.src;
-    v.preload = 'metadata';
-    v.load();
-  };
-  const reelsEls = $$('.reel', track);
-  if ('IntersectionObserver' in window) {
-    const io = new IntersectionObserver((entries) => entries.forEach((e) => {
-      if (!e.isIntersecting) return;
-      io.unobserve(e.target);
-      loadReel(e.target as HTMLElement);
-    }), { rootMargin: '300px' });
-    reelsEls.forEach((el) => io.observe(el));
-    disposers.push(() => io.disconnect());
-  } else reelsEls.forEach(loadReel);
-
-  if (FINE_POINTER && !REDUCED) {
-    reelsEls.forEach((reel) => {
-      reel.addEventListener('pointerenter', () => {
-        const v = $<HTMLVideoElement>('video', reel);
-        if (v && reel.dataset.ok === '1') { v.currentTime = 0; v.play().catch(() => {}); }
-      });
-      reel.addEventListener('pointerleave', () => { const v = $<HTMLVideoElement>('video', reel); if (v) v.pause(); });
-    });
-  }
-  if (REDUCED) { const vp = $('.strip__viewport'); if (vp) vp.style.overflowX = 'auto'; }
 }
 
 function initImageFallbacks(): void {
@@ -675,7 +547,6 @@ function heroScene(seq: FrameSequence, { mobile }: SceneOpts): () => void {
   const hint = $('.hero__hint');
   const count = $('.hero__count');
   const frame = $('.hero__frame');
-  const meta = $('.hero__meta');
   const heroNav = $('.hero__nav');
   const S = heroScale();
 
@@ -693,7 +564,7 @@ function heroScene(seq: FrameSequence, { mobile }: SceneOpts): () => void {
 
   gsap.set(ui, { scale: S, x: offX, y: offY, transformOrigin: '50% 50%' });
   gsap.set(pieces, { autoAlpha: 0 });
-  gsap.set([frame, meta], { autoAlpha: 0 });
+  gsap.set(frame, { autoAlpha: 0 });
 
   const tl = sceneTimeline(section, seq, mobile ? CONFIG.pace.heroMobile : CONFIG.pace.hero, (self) => {
     if (count) count.textContent = `${Math.round(self.progress * 100)}%`;
@@ -736,16 +607,10 @@ function heroScene(seq: FrameSequence, { mobile }: SceneOpts): () => void {
     tl.to(cursorEl, { autoAlpha: 0, duration: 0.03 }, 0.68);
   }
 
-  tl.to(meta, { autoAlpha: 1, duration: 0.04 }, 0.66)
-    .to(ui, { scale: 1, x: 0, y: 0, duration: 0.25, ease: 'power2.inOut' }, 0.7)
+  tl.to(ui, { scale: 1, x: 0, y: 0, duration: 0.25, ease: 'power2.inOut' }, 0.7)
     .to(frame, { autoAlpha: 0, duration: 0.06 }, 0.88)
     .to(canvas, { autoAlpha: 0, duration: 0.08 }, 0.92)
     .to(heroNav, { autoAlpha: 0, duration: 0.03 }, 0.97);
-
-  gsap.to('.hero__thumb', {
-    y: (i: number) => -8 - i * 4, duration: (i: number) => 2.6 + i * 0.5,
-    ease: 'sine.inOut', yoyo: true, repeat: -1,
-  });
 
   return () => { if (fake) fake.remove(); };
 }
@@ -762,16 +627,13 @@ function builderScene(seq: FrameSequence, { mobile }: SceneOpts): void {
 
 function ctaScene(seq: FrameSequence, { mobile }: SceneOpts): void {
   const tl = sceneTimeline($('#contact-scene'), seq, mobile ? CONFIG.pace.sceneMobile : CONFIG.pace.scene);
-  tl.fromTo('.cta__caption', { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: 0.06 }, 0.04)
-    .to('.cta__swap', { yPercent: -50, duration: 0.06, ease: 'power3.inOut' }, 0.32)
-    .to('.cta__caption', { autoAlpha: 0, y: -30, duration: 0.06 }, 0.58)
-    .fromTo('.cta__screen', { autoAlpha: 0, scale: 0.42 }, { autoAlpha: 1, scale: 1, duration: 0.3, ease: 'power2.inOut' }, 0.62)
+  tl.fromTo('.cta__screen', { autoAlpha: 0, scale: 0.42 }, { autoAlpha: 1, scale: 1, duration: 0.4, ease: 'power2.inOut' }, 0.45)
     .to('#scene3', { autoAlpha: 0, duration: 0.1 }, 0.88);
 }
 
 function staticScenes(seqs: FrameSequence[]): void {
   seqs.forEach((s) => s.set(1));
-  gsap.set('.hero__intro, .hero__hint, .builder__caption, .cta__caption', { autoAlpha: 0 });
+  gsap.set('.hero__intro, .hero__hint, .builder__caption', { autoAlpha: 0 });
   gsap.set('#heroUI', { scale: 1, x: 0, y: 0 });
   gsap.set('.builder__reveal, .cta__screen', { autoAlpha: 1 });
   setNavVisible(true);
@@ -846,16 +708,6 @@ function initStats(): void {
   });
 }
 
-function initWordmark(): void {
-  const wm = $('.wordmark');
-  if (!wm) return;
-  if (REDUCED) { wm.style.setProperty('--fill', '100%'); return; }
-  gsap.fromTo(wm, { '--fill': '0%' }, {
-    '--fill': '100%', ease: 'none',
-    scrollTrigger: { trigger: wm, start: 'top bottom', end: 'bottom 80%', scrub: true },
-  });
-}
-
 function lazyLoadScenes(seqs: FrameSequence[]): void {
   const sections: Array<HTMLElement | null> = [null, $<HTMLElement>('#builder'), $<HTMLElement>('#contact-scene')];
   seqs.forEach((seq, i) => {
@@ -871,84 +723,15 @@ function lazyLoadScenes(seqs: FrameSequence[]): void {
 }
 
 /* =======================================================
-   9. ENDLESS MARQUEES (industries + media strip)
-   ======================================================= */
-const LOOPS: Loop[] = [];
-
-function addLoop(track: HTMLElement, { speed, dir = -1, skew = false }: { speed: number; dir?: number; skew?: boolean }): Loop {
-  const L: Loop = { track, speed, dir, skew, x: 0, half: 0, sk: 0, paused: false, visible: true, measure: () => {} };
-  L.measure = () => {
-    const gap = parseFloat(getComputedStyle(track).columnGap) || 0;
-    L.half = (track.scrollWidth + gap) / 2;
-    if (L.dir > 0 && L.x === 0) L.x = -L.half;
-  };
-  L.measure();
-  LOOPS.push(L);
-  if ('IntersectionObserver' in window) {
-    const io = new IntersectionObserver(([e]) => { L.visible = e.isIntersecting; });
-    io.observe(track.parentElement as HTMLElement);
-    disposers.push(() => io.disconnect());
-  }
-  return L;
-}
-
-function initLoops(): void {
-  if (REDUCED) return;
-  LOOPS.length = 0;
-  addLoop($('#industryTrack'), { speed: 45, dir: -1, skew: true });
-  const strip = $('#stripTrack');
-  const S = addLoop(strip, { speed: 32, dir: -1 });
-  strip.addEventListener('pointerenter', () => { S.paused = true; });
-  strip.addEventListener('pointerleave', () => { S.paused = false; });
-  on(window, 'resize', debounce(() => LOOPS.forEach((L) => L.measure()), 200));
-  on(window, 'load', () => LOOPS.forEach((L) => L.measure()));
-  tickerAdd((_time, dt) => {
-    const v = lenis ? lenis.velocity : 0;
-    const boost = 1 + Math.min(Math.abs(v) * 0.06, 3);
-    LOOPS.forEach((L) => {
-      if (!L.half || !L.visible) return;
-      if (!L.paused) {
-        L.x += L.dir * L.speed * boost * (dt / 1000);
-        if (L.x <= -L.half) L.x += L.half;
-        if (L.x > 0) L.x -= L.half;
-      }
-      let tf = `translate3d(${L.x.toFixed(2)}px,0,0)`;
-      if (L.skew) {
-        L.sk += (clamp(-v * 0.35, -8, 8) - L.sk) * 0.1;
-        tf += ` skewX(${L.sk.toFixed(2)}deg)`;
-      }
-      L.track.style.transform = tf;
-    });
-  });
-}
-
-/* =======================================================
    10. NAVIGATION, MENU, ANCHORS, PROGRESS
    ======================================================= */
 function initNav(): void {
   const nav = $('#nav');
-  const links = $$<HTMLAnchorElement>('.navbar__links a[data-link]', nav);
-  const ind = $('.navbar__indicator', nav);
-  const setActive = (key: string | null): void => {
-    links.forEach((a) => a.classList.toggle('is-active', a.dataset.link === key));
-    const a = links.find((l) => l.dataset.link === key);
-    if (!ind) return;
-    if (a) {
-      ind.style.width = `${a.offsetWidth}px`;
-      ind.style.transform = `translateX(${a.offsetLeft}px)`;
-      ind.style.opacity = '1';
-    } else ind.style.opacity = '0';
-  };
-  $$('[data-nav]').forEach((sec) => ScrollTrigger.create({
-    trigger: sec, start: 'top 55%', end: 'bottom 55%',
-    onToggle: (self) => { if (self.isActive) setActive(sec.dataset.nav ?? null); },
-  }));
-  ScrollTrigger.create({ trigger: '#top', start: 'top top', end: 'bottom 55%', onEnterBack: () => setActive(null) });
   ScrollTrigger.create({
     start: 0, end: 'max',
     onUpdate: (self) => {
       const heroEnd = heroST ? heroST.end : window.innerHeight;
-      nav.classList.toggle('is-hidden', self.direction === 1 && self.scroll() > heroEnd + 120 && !menuOpen);
+      nav.classList.toggle('is-hidden', self.direction === 1 && self.scroll() > heroEnd + 120);
     },
   });
 }
@@ -961,37 +744,6 @@ function initProgress(): void {
   });
 }
 
-function initMenu(): void {
-  const nav = $('#nav');
-  const btn = $('.navbar__menu', nav);
-  const menu = $('#menu');
-  if (!btn || !menu) return;
-  menu.style.zIndex = '790';
-  setMenu = (open: boolean): void => {
-    menuOpen = open;
-    btn.setAttribute('aria-expanded', String(open));
-    btn.textContent = open ? 'Close' : 'Menu';
-    nav.classList.remove('is-hidden');
-    if (open) {
-      menu.hidden = false;
-      if (lenis) lenis.stop();
-      if (!REDUCED) {
-        gsap.fromTo(menu, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.35 });
-        gsap.fromTo($$('.menu__link span', menu), { yPercent: 110 }, { yPercent: 0, duration: 0.9, ease: 'expo.out', stagger: 0.06 });
-      }
-      const first = $('a', menu);
-      if (first) first.focus();
-    } else {
-      menu.hidden = true;
-      if (lenis) lenis.start();
-    }
-  };
-  btn.addEventListener('click', () => setMenu(!menuOpen));
-  on(document, 'keydown', (e) => {
-    if (e.key === 'Escape' && menuOpen) { setMenu(false); btn.focus(); }
-  });
-}
-
 function initAnchors(): void {
   on(document, 'click', (e) => {
     const a = (e.target as HTMLElement).closest<HTMLAnchorElement>('a[href^="#"]');
@@ -1001,7 +753,6 @@ function initAnchors(): void {
     const target: HTMLElement | 0 | null = id === '#top' ? 0 : document.querySelector<HTMLElement>(id);
     if (target == null) return;
     e.preventDefault();
-    if (menuOpen) setMenu(false);
     scrollToTarget(target);
   });
   const toTop = $('#toTop');
@@ -1078,7 +829,7 @@ function initGlow(): void {
 }
 
 /* =======================================================
-   12. WORK BROWSER (drag, throw, tidy, filter, list)
+   12. WORK BROWSER (drag, throw)
    ======================================================= */
 const WORK: { mode: 'scatter' | 'tidy'; drags: Draggable[]; useDrag: boolean; entered: boolean } = {
   mode: 'scatter', drags: [], useDrag: false, entered: false,
@@ -1191,71 +942,22 @@ function initWorkLayout({ mobile }: SceneOpts): Cleanup {
 }
 
 function initWorkControls(): void {
-  const browser = $('#browser');
   const canvas = $('#workCanvas');
-  const list = $('#workList');
-
   canvas.addEventListener('click', (e) => {
     const card = (e.target as HTMLElement).closest<HTMLElement>('.wcard');
     if (!card) return;
     if (!WORK.useDrag || e.detail === 0) openPreview(Number(card.dataset.index), card);
-  });
-  list.addEventListener('click', (e) => {
-    const b = (e.target as HTMLElement).closest<HTMLElement>('.wlist__item');
-    if (b) openPreview(Number(b.dataset.index), b);
-  });
-
-  const tabs = $$('.browser__tabs .tab');
-  tabs.forEach((tab) => tab.addEventListener('click', () => {
-    tabs.forEach((t) => {
-      const isOn = t === tab;
-      t.classList.toggle('is-active', isOn);
-      t.setAttribute('aria-selected', String(isOn));
-    });
-    const f = tab.dataset.filter ?? 'all';
-    const matches = (i: number): boolean => f === 'all' || PROJECTS[i].filters.includes(f as ResolvedProject['filters'][number]);
-    $$('.wcard', canvas).forEach((c, i) => {
-      const match = matches(i);
-      c.classList.toggle('is-dim', !match);
-      c.tabIndex = match ? 0 : -1;
-    });
-    $$('li', list).forEach((li, i) => { li.hidden = !matches(i); });
-  }));
-
-  const tools = $$('.tool[data-layout]');
-  tools.forEach((btn) => {
-    btn.setAttribute('aria-pressed', String(btn.dataset.layout === WORK.mode));
-    btn.addEventListener('click', () => {
-      WORK.mode = btn.dataset.layout === 'tidy' ? 'tidy' : 'scatter';
-      tools.forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
-      layoutCards(true);
-    });
-  });
-
-  const toggle = $('#listToggle');
-  toggle.addEventListener('click', () => {
-    const isOn = !browser.classList.contains('is-list');
-    browser.classList.toggle('is-list', isOn);
-    list.hidden = !isOn;
-    toggle.setAttribute('aria-pressed', String(isOn));
-    toggle.textContent = isOn ? 'View as canvas' : 'View as list';
-    if (!isOn) layoutCards(false);
-    ScrollTrigger.refresh();
   });
 }
 
 /* =======================================================
    13. PROJECT PREVIEW
    ======================================================= */
-const PV: { index: number; origin: HTMLElement | null; live: boolean } = { index: 0, origin: null, live: false };
+const PV: { index: number; origin: HTMLElement | null } = { index: 0, origin: null };
 
 function renderPreviewView(p: ResolvedProject): void {
   const view = $('#pvView');
   view.scrollTop = 0;
-  if (PV.live && p.allowIframe) {
-    view.innerHTML = `<iframe class="preview__frame" src="${p.url}" title="${esc(p.name)} live preview" loading="lazy"></iframe>`;
-    return;
-  }
   view.innerHTML = '';
   const img = new Image();
   img.className = 'preview__shot';
@@ -1269,18 +971,10 @@ function renderPreviewView(p: ResolvedProject): void {
 }
 
 function fillPreview(p: ResolvedProject): void {
-  $('#pvCat').textContent = p.category;
   $('#pvTitle').textContent = p.name;
-  $('#pvRole').textContent = p.role || '';
-  $('#pvSummary').textContent = p.summary;
-  $('#pvTags').innerHTML = (p.deliverables || []).map((d) => `<li>${esc(d)}</li>`).join('');
   const visit = $<HTMLAnchorElement>('#pvVisit');
   visit.href = p.url;
-  visit.setAttribute('aria-label', `Visit ${p.name} (opens in a new tab)`);
-  const live = $<HTMLButtonElement>('#pvLive');
-  live.hidden = !p.allowIframe;
-  PV.live = false;
-  $('.btn__label', live).textContent = 'Try live preview';
+  visit.setAttribute('aria-label', `Open ${p.name} (opens in a new tab)`);
   renderPreviewView(p);
   scramble($<HTMLElement>('#address'), p.url.replace(/^https?:\/\//, '').replace(/\/$/, ''), { chars: LOWER, duration: 500 });
 }
@@ -1294,7 +988,7 @@ function pvKeys(e: KeyboardEvent): void {
 
 function showProject(i: number): void {
   PV.index = (i + PROJECTS.length) % PROJECTS.length;
-  const parts = [$('#pvView'), $('.preview__info')];
+  const parts = [$('#pvView'), $('.preview__top')];
   if (!REDUCED) {
     gsap.to(parts, {
       autoAlpha: 0, duration: 0.2,
@@ -1315,7 +1009,7 @@ function openPreview(i: number, origin?: HTMLElement | null): void {
 
   if (!REDUCED) {
     gsap.set(panel, { clearProps: 'transform,opacity' });
-    gsap.set([$('#pvView'), $('.preview__info')], { autoAlpha: 1 });
+    gsap.set([$('#pvView'), $('.preview__top')], { autoAlpha: 1 });
     gsap.fromTo($('.preview__backdrop', pv), { opacity: 0 }, { opacity: 1, duration: 0.4 });
     if (isMobile()) {
       gsap.fromTo(panel, { yPercent: 100 }, { yPercent: 0, duration: 0.6, ease: 'expo.out' });
@@ -1359,12 +1053,6 @@ function closePreview(): void {
 function initPreview(): void {
   const pv = $('#preview');
   $$('[data-close]', pv).forEach((el) => el.addEventListener('click', closePreview));
-  $('#pvNext').addEventListener('click', () => showProject(PV.index + 1));
-  $('#pvLive').addEventListener('click', () => {
-    PV.live = !PV.live;
-    $('.btn__label', $('#pvLive')).textContent = PV.live ? 'Show screenshot' : 'Try live preview';
-    renderPreviewView(PROJECTS[PV.index]);
-  });
   const view = $('#pvView');
   view.tabIndex = 0;
   view.setAttribute('aria-label', 'Project preview, scrollable');
@@ -1391,102 +1079,7 @@ function initPreview(): void {
 }
 
 /* =======================================================
-   14. LIGHTBOX (media strip)
-   ======================================================= */
-const LB: { index: number; origin: HTMLElement | null } = { index: 0, origin: null };
-
-function renderLightbox(): void {
-  const body = $('#lbBody');
-  const it = MEDIA[LB.index];
-  $$<HTMLVideoElement>('video', body).forEach((v) => v.pause());
-  body.innerHTML = '';
-  if (it.type === 'reel') {
-    const ok = $$(`#stripTrack .reel[data-index="${LB.index}"]`).some((el) => el.dataset.ok === '1');
-    if (ok) {
-      const v = document.createElement('video');
-      v.className = 'lightbox__media';
-      v.src = it.src;
-      v.controls = true;
-      v.autoplay = true;
-      v.loop = true;
-      v.playsInline = true;
-      v.setAttribute('aria-label', it.title);
-      body.appendChild(v);
-      v.play().catch(() => {});
-    } else {
-      body.innerHTML = `<div class="lightbox__media reel is-fallback ${it.ratio === '9:16' ? 'reel--tall' : 'reel--wide'}" style="height:min(70vh,640px)">
-        <span class="reel__tag mono">Placeholder</span>
-        <span class="reel__meta"><span class="reel__title">${esc(it.title)} · coming soon</span></span></div>`;
-    }
-  } else {
-    const img = new Image();
-    img.className = 'lightbox__media';
-    img.alt = it.alt;
-    img.src = it.resolved;
-    body.appendChild(img);
-  }
-}
-
-function stepLightbox(d: number): void {
-  LB.index = (LB.index + d + MEDIA.length) % MEDIA.length;
-  renderLightbox();
-}
-
-function lbKeys(e: KeyboardEvent): void {
-  if (e.key === 'Escape') closeLightbox();
-  else if (e.key === 'ArrowRight') stepLightbox(1);
-  else if (e.key === 'ArrowLeft') stepLightbox(-1);
-  else if (e.key === 'Tab') trapFocus($('#lightbox'), e);
-}
-
-function openLightbox(index: number, origin: HTMLElement): void {
-  const lb = $('#lightbox');
-  LB.index = index; LB.origin = origin;
-  renderLightbox();
-  lb.hidden = false;
-  if (lenis) lenis.stop();
-  document.addEventListener('keydown', lbKeys);
-  if (!REDUCED) {
-    gsap.fromTo(lb, { autoAlpha: 0 }, { autoAlpha: 1, duration: 0.35 });
-    gsap.fromTo('#lbBody', { scale: 0.94 }, { scale: 1, duration: 0.6, ease: 'expo.out' });
-  }
-  requestAnimationFrame(() => $('.lightbox__close', lb).focus());
-}
-
-function closeLightbox(): void {
-  const lb = $('#lightbox');
-  if (lb.hidden) return;
-  document.removeEventListener('keydown', lbKeys);
-  const done = (): void => {
-    $$<HTMLVideoElement>('#lbBody video').forEach((v) => v.pause());
-    $('#lbBody').innerHTML = '';
-    lb.hidden = true;
-    if (lenis) lenis.start();
-    if (LB.origin && LB.origin.focus) LB.origin.focus({ preventScroll: true });
-  };
-  if (!REDUCED) {
-    gsap.to(lb, { autoAlpha: 0, duration: 0.25, onComplete: () => { done(); gsap.set(lb, { clearProps: 'opacity,visibility' }); } });
-  } else done();
-}
-
-function initLightbox(): void {
-  const lb = $('#lightbox');
-  const prev = document.createElement('button');
-  prev.className = 'lightbox__prev'; prev.type = 'button'; prev.setAttribute('aria-label', 'Previous'); prev.textContent = '‹';
-  const next = document.createElement('button');
-  next.className = 'lightbox__next'; next.type = 'button'; next.setAttribute('aria-label', 'Next'); next.textContent = '›';
-  lb.append(prev, next);
-  prev.addEventListener('click', () => stepLightbox(-1));
-  next.addEventListener('click', () => stepLightbox(1));
-  $$('[data-close]', lb).forEach((el) => el.addEventListener('click', closeLightbox));
-  $('#stripTrack').addEventListener('click', (e) => {
-    const el = (e.target as HTMLElement).closest<HTMLElement>('.reel, .post');
-    if (el) openLightbox(Number(el.dataset.index), el);
-  });
-}
-
-/* =======================================================
-   15. CONTACT FORM
+   14. CONTACT FORM + COPY EMAIL
    ======================================================= */
 function formSuccess(form: HTMLFormElement): void {
   const done = $('#formDone');
@@ -1525,7 +1118,7 @@ function initForm(): void {
   const rules: Record<FieldKey, (v: string) => string> = {
     name: (v) => (v.trim() ? '' : 'Enter your name.'),
     email: (v) => (/^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(v.trim()) ? '' : 'Enter a valid email address.'),
-    message: (v) => (v.trim().length >= 2 ? '' : 'Tell me a little about your project.'),
+    message: (v) => (v.trim().length >= 2 ? '' : 'Tell me a little about what you’re building.'),
   };
   const showErr = (key: FieldKey, msg: string): void => {
     const f = fields[key];
@@ -1533,20 +1126,12 @@ function initForm(): void {
     f.setAttribute('aria-invalid', msg ? 'true' : 'false');
     $(`#err-${key}`).textContent = msg;
   };
-  const checkNeed = (): boolean => {
-    const ok = $$('input[name="need"]:checked', form).length > 0;
-    $('#err-need').textContent = ok ? '' : 'Pick at least one option.';
-    return ok;
-  };
 
   keys.forEach((key) => {
     const f = fields[key];
     f.addEventListener('blur', () => { if (f.value) showErr(key, rules[key](f.value)); });
     f.addEventListener('input', () => { if (!rules[key](f.value)) showErr(key, ''); });
   });
-  $$('input[name="need"]', form).forEach((cb) => cb.addEventListener('change', () => {
-    if ($('#err-need').textContent) checkNeed();
-  }));
   fields.message.addEventListener('input', () => {
     fields.message.style.height = 'auto';
     fields.message.style.height = `${fields.message.scrollHeight}px`;
@@ -1560,16 +1145,12 @@ function initForm(): void {
       showErr(key, msg);
       if (msg && !firstBad) firstBad = fields[key];
     });
-    if (!checkNeed() && !firstBad) firstBad = $<HTMLElement>('input[name="need"]', form);
     if (firstBad) { (firstBad as HTMLElement).focus(); return; }
 
     const data = new FormData(form);
     const payload = {
       name: String(data.get('name')).trim(),
       email: String(data.get('email')).trim(),
-      phone: String(data.get('phone') || '').trim() || 'Not given',
-      need: data.getAll('need').join(', '),
-      budget: String(data.get('budget') || 'Not given'),
       message: String(data.get('message')).trim(),
     };
     const { formEndpoint, formKey, email: toEmail } = SITE_DATA.contact;
@@ -1607,8 +1188,33 @@ function initForm(): void {
   });
 }
 
+/** "or email me directly → address": click copies the address and flashes "Copied ✦". */
+function initCopyEmail(): void {
+  const btn = $<HTMLButtonElement>('#copyEmail');
+  const toast = $('#copyToast');
+  if (!btn || !toast) return;
+  const address = btn.dataset.email ?? '';
+  let timer: number | undefined;
+  btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(address);
+    } catch {
+      window.location.href = `mailto:${address}`;
+      return;
+    }
+    toast.textContent = 'Copied ✦';
+    toast.classList.add('is-on');
+    if (!REDUCED) gsap.fromTo(toast, { autoAlpha: 0, y: 6 }, { autoAlpha: 1, y: 0, duration: 0.3, ease: 'power2.out' });
+    window.clearTimeout(timer);
+    timer = window.setTimeout(() => {
+      toast.classList.remove('is-on');
+      toast.textContent = '';
+    }, 1800);
+  });
+}
+
 /* =======================================================
-   16. RESPONSIVE SETUP + BOOT
+   15. RESPONSIVE SETUP + BOOT
    ======================================================= */
 function initResponsive(seqs: FrameSequence[]): gsap.MatchMedia {
   const mm = gsap.matchMedia();
@@ -1649,20 +1255,16 @@ export function initPortfolio(): () => void {
     if (address) ADDRESS_DEFAULT = (address.textContent ?? '').trim() || ADDRESS_DEFAULT;
 
     buildStats();
-    buildMarquee();
-    buildHeroThumbs();
     buildWork();
-    buildStrip();
     initImageFallbacks();
 
     const seqs = createSequences();
 
     initAnchors();
-    initMenu();
     initWorkControls();
     initPreview();
-    initLightbox();
     initForm();
+    initCopyEmail();
     if (FINE_POINTER) initGlow();
 
     root.classList.add('js');
@@ -1680,10 +1282,8 @@ export function initPortfolio(): () => void {
     initScrambles();
     initReveals();
     initStats();
-    initWordmark();
     initNav();
     initProgress();
-    initLoops();
     if (FINE_POINTER && !REDUCED) { initCursor(); initMagnetic(); }
 
     lazyLoadScenes(seqs);
@@ -1709,6 +1309,5 @@ export function initPortfolio(): () => void {
     ScrollTrigger.getAll().forEach((st) => st.kill());
     if (lenis) { lenis.destroy(); lenis = null; }
     heroST = null;
-    menuOpen = false;
   };
 }
