@@ -1,0 +1,58 @@
+/* PrismCarousel — see PrismCarousel.tsx. Sizes are set from JS; this is the look. */
+.prism-carousel { position: relative; outline: none; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.prism-carousel:focus-visible { outline: 2px solid var(--accent); outline-offset: 8px; border-radius: 16px; }
+.prism-carousel__stage { position: relative; height: var(--pc-stage, 420px); }
+
+.prism-carousel__card {
+  position: absolute; left: 50%; top: 50%;
+  overflow: hidden; border-radius: 12px; background: #121116; cursor: pointer;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 24px 50px -24px rgba(0, 0, 0, 0.8);
+}
+.prism-carousel__media {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; display: block; pointer-events: none; -webkit-user-drag: none;
+}
+.prism-carousel__media--grey { filter: grayscale(1) brightness(0.62) contrast(1.05); }
+.prism-carousel__color { position: absolute; inset: 0; }
+
+/* An embedded player (e.g. LinkedIn) in the centre card: it takes clicks itself */
+.prism-carousel__embed { border: 0; background: #000; pointer-events: auto; }
+/* Placeholder for an item without a still yet */
+.prism-carousel__ph {
+  display: grid; place-content: center; justify-items: center; gap: 10px;
+  background: radial-gradient(120% 90% at 30% 20%, #2A1D4A, #0E0C16 70%);
+  font-family: var(--f-mono); font-size: 0.7rem; letter-spacing: 0.14em; text-transform: uppercase; color: rgba(243, 241, 247, 0.6);
+}
+.prism-carousel__ph b {
+  display: grid; place-items: center; width: 52px; height: 52px; border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1); font-size: 16px; color: #fff; text-indent: 3px;
+}
+
+/* The rainbow band on the edge of the colour sweep */
+.prism-carousel__band {
+  position: absolute; top: 0; bottom: 0; width: 22%; transform: translateX(-50%);
+  opacity: 0; pointer-events: none; mix-blend-mode: screen; filter: blur(3px);
+  background: linear-gradient(90deg,
+    rgba(255, 64, 129, 0) 0%, rgba(255, 64, 129, 0.55) 18%, rgba(255, 196, 64, 0.6) 36%,
+    rgba(96, 255, 160, 0.55) 52%, rgba(64, 170, 255, 0.6) 68%, rgba(176, 96, 255, 0.55) 84%, rgba(176, 96, 255, 0) 100%);
+}
+
+.prism-carousel__meta { display: grid; justify-items: center; gap: 16px; margin-top: 24px; text-align: center; }
+.prism-carousel__caption { animation: prism-caption 0.6s cubic-bezier(0.16, 1, 0.3, 1) both; }
+@keyframes prism-caption { from { opacity: 0; transform: translateY(8px); } }
+.prism-carousel__title { font-size: 1.0625rem; font-weight: 600; color: var(--ink); }
+.prism-carousel__sub { margin-top: 4px; font-size: 0.875rem; color: var(--ink-2); }
+.prism-carousel__controls { display: flex; align-items: center; gap: 16px; }
+.prism-carousel__btn {
+  display: grid; place-items: center; width: 36px; height: 36px; padding: 0;
+  border: 0; border-radius: 50%; background: rgba(255, 255, 255, 0.08); color: var(--ink); cursor: pointer;
+  transition: background-color 0.25s;
+}
+.prism-carousel__btn:hover { background: rgba(255, 255, 255, 0.16); }
+.prism-carousel__count {
+  min-width: 4.6em; text-align: center;
+  font-family: var(--f-mono); font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--ink-2);
+}
+
+@media (prefers-reduced-motion: reduce) { .prism-carousel__caption { animation: none; } }

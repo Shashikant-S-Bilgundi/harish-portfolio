@@ -7,6 +7,8 @@ import Stats from './components/Stats';
 import Mission from './components/Mission';
 import WorkScene from './components/WorkScene';
 import Work from './components/Work';
+import FilmsSection from './components/FilmsSection';
+import ReelsSection from './components/ReelsSection';
 import CtaScene from './components/CtaScene';
 import Contact from './components/Contact';
 import Footer from './components/Footer';
@@ -29,6 +31,8 @@ export default function App() {
         <Mission />
         <WorkScene />
         <Work />
+        <FilmsSection />
+        <ReelsSection />
         <CtaScene />
         <Contact />
       </main>

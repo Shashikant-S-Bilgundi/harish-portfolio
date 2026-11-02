@@ -1,9 +1,12 @@
 /* =========================================================
    LAPTOP SCENES — drawn on canvas, no image files needed.
 
-   paintLaptopZoom       Hero. An open laptop in front of a violet horizon;
-                         the camera pushes into its screen until the screen
-                         fills the view.
+   paintLaptopZoom       Hero. A closed laptop sits small on a violet horizon;
+                         the camera moves in as the lid opens and the screen
+                         lights up, then pushes into the screen until it
+                         fills the view. heroGeometry() says where the
+                         screen is at any moment, so the page can put the
+                         text inside it.
    paintLaptopOpenClose  Work scene. The lid opens, the screen lights up with
                          project tiles, then the lid closes again.
 
@@ -91,6 +94,36 @@ function paintStudio(ctx: CanvasRenderingContext2D, w: number, h: number, horizo
   ctx.fillRect(0, 0, w, h);
 }
 
+/* ---------- Hero backdrop, matched to the reference image ----------
+   Near-black sky; a bright lavender light strip on the horizon with a tall
+   violet glow above it; its reflection fading across a glossy floor.
+   Each stop: [distance from the horizon in screen heights, r, g, b]. */
+const SKY: [number, number, number, number][] = [
+  [-0.59, 10, 9, 16], [-0.39, 12, 10, 26], [-0.307, 20, 14, 39], [-0.247, 28, 20, 55], [-0.187, 43, 32, 83],
+  [-0.137, 65, 48, 123], [-0.087, 107, 80, 171], [-0.047, 159, 132, 207], [-0.017, 203, 185, 232], [0, 222, 208, 243],
+  [0.008, 179, 161, 214], [0.013, 171, 152, 214], [0.033, 127, 104, 183], [0.063, 84, 63, 145], [0.113, 43, 32, 86],
+  [0.163, 25, 16, 49], [0.233, 13, 7, 26], [0.313, 8, 6, 15], [0.42, 9, 8, 14],
+];
+const NIGHT = [9, 8, 14];
+
+function paintHorizon(ctx: CanvasRenderingContext2D, w: number, h: number, horizon: number, spread: number, strength: number): void {
+  const g = ctx.createLinearGradient(0, 0, 0, h);
+  for (const [o, r, gr, b] of SKY) {
+    const c = [r, gr, b].map((v, k) => Math.round(NIGHT[k] + (v - NIGHT[k]) * strength));
+    g.addColorStop(clamp((horizon + o * h * spread) / h, 0, 1), `rgb(${c[0]},${c[1]},${c[2]})`);
+  }
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, w, h);
+  // The crisp core of the light strip
+  const t = Math.max(1, h * 0.0035 * spread);
+  const core = ctx.createLinearGradient(0, horizon - t * 2, 0, horizon + t * 2);
+  core.addColorStop(0, 'rgba(244,240,255,0)');
+  core.addColorStop(0.5, `rgba(244,240,255,${0.85 * strength})`);
+  core.addColorStop(1, 'rgba(244,240,255,0)');
+  ctx.fillStyle = core;
+  ctx.fillRect(0, horizon - t * 2, w, t * 4);
+}
+
 /* ---------- What the screen shows when it's lit: a little gallery of project tiles ---------- */
 function paintScreenUI(ctx: CanvasRenderingContext2D, x: number, y: number, sw: number, sh: number, colors: string[], glow: number): void {
   ctx.save();
@@ -141,7 +174,9 @@ interface LaptopOpts {
   lidH: number;      // visible lid height: shrinks as the lid closes
   glow: number;      // 0 = screen off (dark glass), 1 = fully lit
   glare?: number;    // strength of the reflection on the glass (default 1)
-  colors?: string[]; // project colours for the lit screen
+  colors?: string[]; // project colours for the lit screen (tiles); without them, a plain lit screen
+  deckScale?: number; // <1 flattens the top surface, for a low camera far away
+  frontRatio?: number; // front width ÷ back width (perspective taper); default 1.2
   viewH: number;     // canvas height, to skip parts that are off-screen
 }
 
@@ -150,9 +185,13 @@ function paintLaptop(ctx: CanvasRenderingContext2D, o: LaptopOpts): void {
   const s = lw / 1000;
   const fullH = lw / LID_RATIO;
   const f = clamp(lidH / fullH, 0, 1);          // how open the lid looks
-  const deckH = 64 * s;
-  const backW = lw * 0.99, frontW = lw * 1.2;
+  const deckH = 64 * s * (o.deckScale ?? 1);
+  const shut = 1 - seg(f, 0, 0.12);       // 1 while the lid lies closed on the base
+  const baseT = 22 * s;                   // front edge of the base
+  const lidT = 20 * s * shut;             // front edge of the closed lid, on top of the base's
+  const backW = lw * 0.99, frontW = lw * (o.frontRatio ?? 1.2);
   const front = hinge + deckH;
+  const faceBot = front + lidT + baseT;
   const lidTop = hinge - lidH;
   let g: CanvasGradient;
 
@@ -168,7 +207,7 @@ function paintLaptop(ctx: CanvasRenderingContext2D, o: LaptopOpts): void {
   if (hinge < o.viewH + deckH * 4) {
     // Contact shadow
     ctx.save();
-    ctx.translate(cx, front + 4 * s);
+    ctx.translate(cx, faceBot + 3 * s);
     ctx.scale(1, 0.1);
     g = ctx.createRadialGradient(0, 0, 0, 0, 0, frontW * 0.62);
     g.addColorStop(0, 'rgba(0,0,0,0.75)');
@@ -214,42 +253,93 @@ function paintLaptop(ctx: CanvasRenderingContext2D, o: LaptopOpts): void {
       ctx.fill();
     }
 
-    // Front lip and its silver edge
-    ctx.fillStyle = '#0C0B11';
-    roundedPoly(ctx, trapezoid(cx, front, front + 9 * s, frontW, frontW * 0.995), 3 * s);
+    // Front edge: the closed lid's edge (while shut) over the base's edge
+    if (lidT > 0.5) {
+      g = ctx.createLinearGradient(0, front, 0, front + lidT);
+      g.addColorStop(0, '#C9C6D4');
+      g.addColorStop(0.3, '#8E8A99');
+      g.addColorStop(0.8, '#55515C');
+      g.addColorStop(1, '#2A262D');
+      ctx.fillStyle = g;
+      roundedPoly(ctx, rect(cx - frontW / 2, front, frontW, lidT), Math.min(4 * s, lidT / 2));
+      ctx.fill();
+    }
+    g = ctx.createLinearGradient(0, front + lidT, 0, faceBot);
+    g.addColorStop(0, '#77737F');
+    g.addColorStop(0.5, '#4A4650');
+    g.addColorStop(0.85, '#2C2930');
+    g.addColorStop(1, '#8C8898'); // the bottom edge catches the floor's light
+    ctx.fillStyle = g;
+    roundedPoly(ctx, rect(cx - frontW / 2 + 2 * s, front + lidT, frontW - 4 * s, baseT), Math.min(6 * s, baseT / 2));
     ctx.fill();
+    // Highlights along the top of the front edge and the seam, brightest in the middle
     g = ctx.createLinearGradient(cx - frontW / 2, 0, cx + frontW / 2, 0);
-    g.addColorStop(0, 'rgba(220,220,235,0.05)');
-    g.addColorStop(0.5, 'rgba(242,240,250,0.9)');
-    g.addColorStop(1, 'rgba(220,220,235,0.05)');
+    g.addColorStop(0, 'rgba(225,222,240,0.15)');
+    g.addColorStop(0.5, 'rgba(246,244,252,0.95)');
+    g.addColorStop(1, 'rgba(225,222,240,0.15)');
     ctx.strokeStyle = g;
-    ctx.lineWidth = Math.max(1, 3 * s);
-    ctx.beginPath();
-    ctx.moveTo(cx - frontW / 2 + 10 * s, front);
-    ctx.lineTo(cx + frontW / 2 - 10 * s, front);
-    ctx.stroke();
-    // Faint reflection on the glossy floor
-    ctx.globalAlpha = 0.18;
-    ctx.lineWidth = Math.max(1, 6 * s);
-    ctx.beginPath();
-    ctx.moveTo(cx - frontW * 0.4, front + 26 * s);
-    ctx.lineTo(cx + frontW * 0.4, front + 26 * s);
-    ctx.stroke();
+    ctx.lineWidth = Math.max(1, 2.4 * s);
+    ctx.beginPath(); ctx.moveTo(cx - frontW / 2 + 6 * s, front); ctx.lineTo(cx + frontW / 2 - 6 * s, front); ctx.stroke();
+    ctx.globalAlpha = 0.45;
+    ctx.lineWidth = Math.max(1, 1.4 * s);
+    ctx.beginPath(); ctx.moveTo(cx - frontW / 2 + 8 * s, front + lidT + 1.5 * s); ctx.lineTo(cx + frontW / 2 - 8 * s, front + lidT + 1.5 * s); ctx.stroke();
     ctx.globalAlpha = 1;
+    if (lidT > 0.5) {
+      ctx.strokeStyle = 'rgba(16,13,18,0.9)';
+      ctx.lineWidth = Math.max(1, 1.6 * s);
+      ctx.beginPath(); ctx.moveTo(cx - frontW / 2 + 3 * s, front + lidT); ctx.lineTo(cx + frontW / 2 - 3 * s, front + lidT); ctx.stroke();
+    }
+    // Sheen across the front edge, brighter toward the right
+    g = ctx.createLinearGradient(cx - frontW / 2, 0, cx + frontW / 2, 0);
+    g.addColorStop(0, 'rgba(255,255,255,0)');
+    g.addColorStop(0.62, 'rgba(255,255,255,0.05)');
+    g.addColorStop(0.85, 'rgba(255,255,255,0.16)');
+    g.addColorStop(1, 'rgba(255,255,255,0.02)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - frontW / 2 + 2 * s, front, frontW - 4 * s, lidT + baseT);
+
+    // Reflection in the glossy floor: the front edge mirrored, fainter with distance
+    const gap = 5 * s;
+    const mTop = faceBot + gap; // the base's edge reflects first, then the lid's
+    ctx.globalAlpha = 0.38;
+    g = ctx.createLinearGradient(0, mTop, 0, mTop + baseT);
+    g.addColorStop(0, '#8C8898');
+    g.addColorStop(0.15, '#2C2930');
+    g.addColorStop(1, '#5A5662');
+    ctx.fillStyle = g;
+    roundedPoly(ctx, rect(cx - frontW / 2 + 2 * s, mTop, frontW - 4 * s, baseT), Math.min(6 * s, baseT / 2));
+    ctx.fill();
+    if (lidT > 0.5) {
+      ctx.globalAlpha = 0.2;
+      g = ctx.createLinearGradient(0, mTop + baseT, 0, mTop + baseT + lidT);
+      g.addColorStop(0, '#55515C');
+      g.addColorStop(1, '#C9C6D4');
+      ctx.fillStyle = g;
+      roundedPoly(ctx, rect(cx - frontW / 2, mTop + baseT, frontW, lidT), Math.min(4 * s, lidT / 2));
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+    // Fade the reflection into the floor
+    g = ctx.createLinearGradient(0, mTop, 0, mTop + (baseT + lidT) * 1.1);
+    g.addColorStop(0, 'rgba(40,28,80,0)');
+    g.addColorStop(1, 'rgba(40,28,80,0.55)');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - frontW / 2, mTop, frontW, (baseT + lidT) * 1.1);
   }
 
   // Closed: the lid lies flat over the deck
   if (f < 0.12) {
     const a = 1 - f / 0.12;
     ctx.globalAlpha = a;
-    roundedPoly(ctx, trapezoid(cx, hinge - 2 * s, front - 3 * s, backW, frontW * 0.985), 10 * s);
-    g = ctx.createLinearGradient(cx - frontW / 2, hinge, cx + frontW / 2, front);
-    g.addColorStop(0, '#24212D');
-    g.addColorStop(0.55, '#17151D');
-    g.addColorStop(1, '#201D28');
+    roundedPoly(ctx, trapezoid(cx, hinge, front, backW, frontW), 10 * s); // exactly over the base, so no edge shows
+    // Graphite, catching the violet glow from the horizon behind it
+    g = ctx.createLinearGradient(0, hinge, 0, front);
+    g.addColorStop(0, '#544383');
+    g.addColorStop(0.55, '#5E5578');
+    g.addColorStop(1, '#615A77');
     ctx.fillStyle = g;
     ctx.fill();
-    ctx.strokeStyle = 'rgba(230,230,240,0.35)';
+    ctx.strokeStyle = 'rgba(230,226,245,0.18)';
     ctx.lineWidth = Math.max(1, 1.6 * s);
     ctx.stroke();
     ctx.globalAlpha = 1;
@@ -286,6 +376,16 @@ function paintLaptop(ctx: CanvasRenderingContext2D, o: LaptopOpts): void {
   ctx.fillRect(cx - sw / 2, sTop, sw, sh);
 
   if (glow > 0 && o.colors) paintScreenUI(ctx, cx - sw / 2, sTop, sw, sh, o.colors, glow);
+  else if (glow > 0) {
+    // A plain lit screen: the backdrop for the hero text that sits inside it
+    ctx.globalAlpha = glow;
+    g = ctx.createRadialGradient(cx, sTop + sh * 0.45, 0, cx, sTop + sh * 0.45, sw * 0.7);
+    g.addColorStop(0, '#2C1658');
+    g.addColorStop(1, '#0B0912');
+    ctx.fillStyle = g;
+    ctx.fillRect(cx - sw / 2, sTop, sw, sh);
+    ctx.globalAlpha = 1;
+  }
 
   // Violet horizon reflected low in the glass
   g = ctx.createLinearGradient(0, sTop, 0, sBot);
@@ -317,27 +417,71 @@ function paintLaptop(ctx: CanvasRenderingContext2D, o: LaptopOpts): void {
   ctx.fill();
 }
 
-/* ---------- Hero: push into the screen ---------- */
-export const paintLaptopZoom: Painter = (ctx, w, h, p) => {
+/* ---------- Hero: the lid opens, then the camera pushes into the screen ---------- */
+export interface HeroGeometry {
+  approach: number; // 0 far away (closed, small on the horizon) … 1 close up
+  open: number;     // 0 closed … 1 open
+  push: number;     // 0 … 1 through the push-in
+  glow: number;     // screen light
+  lw: number; lidH: number; hinge: number; deckScale: number; frontRatio: number;
+  horizon: number; spread: number; strength: number;
+  /** The screen's rectangle, in the same units as w and h. */
+  screen: { x: number; y: number; w: number; h: number };
+}
+
+/**
+ * Where everything in the hero is at scroll progress p, for a w × h view:
+ *   0      the closed laptop sits small on the horizon (as in the reference image)
+ *   →0.34  the camera moves in while the lid opens and the screen lights up
+ *   →0.86  the camera pushes into the screen until it fills the view
+ */
+export function heroGeometry(w: number, h: number, p: number): HeroGeometry {
   const portrait = w < h;
-  const lw0 = Math.min(h * 0.74, w * (portrait ? 0.86 : 0.42));
+  const lw0 = Math.min(h * 0.74, w * (portrait ? 0.86 : 0.42)); // lid width once close up
   const lh0 = lw0 / LID_RATIO;
   const s0 = lw0 / 1000;
   const sw0 = lw0 - BEZEL * 2 * s0, sh0 = lh0 - (BEZEL + CHIN) * s0;
   const zEnd = Math.max(w / sw0, h / sh0) * 1.12;
-  const push = easeInOut(seg(p, 0, 0.74));
-  const z = Math.pow(zEnd, push); // exponential zoom reads as a steady camera move
+  const approach = easeInOut(seg(p, 0.02, 0.34));
+  const open = easeInOut(seg(p, 0.08, 0.32));
+  const push = easeInOut(seg(p, 0.36, 0.86));
+  // Far and low, the front is barely wider than the back; close up and higher, much more.
+  const ratioFar = 1.035;
+  const frontRatio = lerp(ratioFar, 1.2, approach);
+  // Far away, the closed laptop's front edge spans 22% of the view (62% on phones).
+  const zFar = clamp(((portrait ? 0.62 : 0.224) * w) / ratioFar / lw0, 0.2, 1);
+  const zPush = Math.pow(zEnd, push); // exponential zoom reads as a steady camera move
+  const z = lerp(zFar, 1, approach) * zPush;
   const cy = h * 0.5;
+  const s = s0 * z, lw = lw0 * z;
+  // The horizon stays put while the camera moves in at the same height, then drifts during the push.
+  const zb = 1 + (zPush - 1) * 0.1;
+  const horizon0 = h * (portrait ? 0.6 : 0.587);
+  const horizon = horizon0 + (zb - 1) * h * 0.35;
+  // Far: the laptop's back edge sits just below the horizon. Close: the open screen is centred.
+  const hingeFar = horizon0 + 0.069 * ratioFar * lw0 * zFar;
+  const hingeNear = cy + (lh0 * z + (CHIN - BEZEL) * s) / 2;
+  const hinge = lerp(hingeFar, hingeNear, approach);
+  const lidH = lh0 * z * open; // fully flat when closed
+  const f = clamp(lidH / (lw / LID_RATIO), 0, 1);
+  const sTop = hinge - lidH + BEZEL * s * f, sBot = hinge - CHIN * s * f;
+  const sw = lw - BEZEL * 2 * s;
+  return {
+    approach, open, push, glow: easeInOut(seg(open, 0.55, 1)), lw, lidH, hinge,
+    deckScale: lerp(0.67, 1, approach), // a low, distant camera sees the top surface very flat
+    frontRatio,
+    horizon, spread: zb, strength: 1 - push * 0.55,
+    screen: { x: w / 2 - sw / 2, y: sTop, w: sw, h: Math.max(0, sBot - sTop) },
+  };
+}
 
-  // The backdrop is far away, so it moves much less than the laptop
-  const zb = 1 + (z - 1) * 0.1;
-  const horizon = cy + lh0 * 0.22 * zb + (zb - 1) * h * 0.35;
-  paintStudio(ctx, w, h, horizon, h * 0.07 * zb, 1 - push * 0.55);
-
-  const s = s0 * z, lidH = lh0 * z;
-  // Keep the centre of the screen on the centre of the view while zooming
-  const hinge = cy + (lidH + (CHIN - BEZEL) * s) / 2;
-  paintLaptop(ctx, { cx: w / 2, hinge, lw: lw0 * z, lidH, glow: 0, glare: 1 - 0.75 * push, viewH: h });
+export const paintLaptopZoom: Painter = (ctx, w, h, p) => {
+  const g = heroGeometry(w, h, p);
+  paintHorizon(ctx, w, h, g.horizon, g.spread, g.strength);
+  paintLaptop(ctx, {
+    cx: w / 2, hinge: g.hinge, lw: g.lw, lidH: g.lidH, glow: g.glow,
+    glare: 1 - 0.75 * g.push, deckScale: g.deckScale, frontRatio: g.frontRatio, viewH: h,
+  });
 };
 
 /* ---------- Work scene: open, show the work, close ---------- */

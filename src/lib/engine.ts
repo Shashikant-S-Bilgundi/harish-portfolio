@@ -17,8 +17,8 @@ import { Draggable } from 'gsap/Draggable';
 import { InertiaPlugin } from 'gsap/InertiaPlugin';
 import Lenis from 'lenis';
 import 'lenis/dist/lenis.css';
-import { SITE, SCENES, PROJECTS, SCATTER, type SceneConfig, type ResolvedProject } from '../data/siteData';
-import { paintLaptopZoom, paintLaptopOpenClose, type Painter } from './laptop';
+import { SITE, SCENES, PROJECTS, SCATTER, type SceneConfig, type SceneVideo, type ResolvedProject } from '../data/siteData';
+import { paintLaptopZoom, paintLaptopOpenClose, heroGeometry, type Painter } from './laptop';
 
 gsap.registerPlugin(ScrollTrigger, SplitText, Draggable, InertiaPlugin);
 
@@ -30,6 +30,16 @@ const $$ = <T extends Element = HTMLElement>(s: string, c: ParentNode = document
 const clamp = (v: number, a: number, b: number): number => Math.min(b, Math.max(a, v));
 const lerp = (a: number, b: number, t: number): number => a + (b - a) * t;
 const easeInOut = (t: number): number => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
+const smooth = (e0: number, e1: number, x: number): number => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+/** Piecewise-linear lookup through [x, y] points (x ascending). */
+const curve = (pts: [number, number][]) => (x: number): number => {
+  if (x <= pts[0][0]) return pts[0][1];
+  for (let i = 1; i < pts.length; i++) {
+    const [x1, y1] = pts[i];
+    if (x <= x1) { const [x0, y0] = pts[i - 1]; return lerp(y0, y1, (x - x0) / (x1 - x0 || 1)); }
+  }
+  return pts[pts.length - 1][1];
+};
 const wait = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
 const debounce = <A extends unknown[]>(fn: (...a: A) => void, ms = 150) => {
   let t: number | undefined;
@@ -95,6 +105,25 @@ function soften(img: HTMLImageElement, factor: number): HTMLCanvasElement {
   return c;
 }
 
+/**
+ * Cloudinary serves any moment of a video as an image when the time (so_) is
+ * added to its link and the extension is changed to .jpg. Returns a function
+ * giving the link for frame i, or null for links that aren't Cloudinary videos.
+ */
+const CLOUDINARY_VIDEO = /^(.*\/video\/upload\/)(.+?)\.(mp4|mov|webm|m4v)(\?.*)?$/i;
+function cloudinaryFrames(v: SceneVideo, mobile: boolean): ((i: number) => string) | null {
+  const m = CLOUDINARY_VIDEO.exec(v.url);
+  if (!m) return null;
+  const [, base, path] = m;
+  const n = mobile ? v.frames.mobile : v.frames.desktop;
+  const size = mobile ? 'w_608,h_1080,c_fill,g_center' : 'w_1440,c_limit';
+  const last = Math.min(v.to, v.duration - 0.05);
+  return (i) => {
+    const t = v.from + (last - v.from) * (n > 1 ? i / (n - 1) : 0);
+    return `${base}so_${t.toFixed(2)},${size},q_auto:eco/${path}.jpg`;
+  };
+}
+
 class ScrollScene {
   readonly cfg: SceneConfig;
   readonly section: HTMLElement;
@@ -111,8 +140,16 @@ class ScrollScene {
   private p = 0;
   private drawn = -1; // exact (fractional) frame position last drawn
   private painter: Painter | null = null;
-  /** 'none' = the scene is built from HTML (the 3D orbit), so the canvas only plays frames. */
-  mode: 'photo' | 'paint' | 'frames' | 'none' = 'paint';
+  /** Where frame i comes from: local files, or Cloudinary for an online video. */
+  private src: (i: number) => string = (i) => `${this.dir}/${String(i + 1).padStart(4, '0')}.${this.ext}`;
+  private video: HTMLVideoElement | null = null;
+  private seeking = false;
+  private want = 0;
+  /**
+   * 'frames' = image sequence (local or Cloudinary) · 'video' = scrubbing a video file
+   * 'none' = the scene is built from HTML (the 3D orbit) · 'paint' = drawn laptop · 'photo'
+   */
+  mode: 'photo' | 'paint' | 'frames' | 'video' | 'none' = 'paint';
 
   constructor(cfg: SceneConfig) {
     this.cfg = cfg;
@@ -134,6 +171,11 @@ class ScrollScene {
   }
 
   private async detect(): Promise<void> {
+    if (this.cfg.video) {
+      await this.detectVideo(this.cfg.video);
+      this.render(true);
+      return;
+    }
     try {
       const res = await fetch(`${this.cfg.frames}/manifest.json`, { cache: 'no-cache' });
       if (res.ok) {
@@ -180,6 +222,118 @@ class ScrollScene {
     });
   }
 
+  /** An online video: Cloudinary frames when possible (smooth), otherwise the video file itself. */
+  private async detectVideo(v: SceneVideo): Promise<void> {
+    this.section.classList.add('has-video');
+    const frameAt = cloudinaryFrames(v, MOBILE_AT_LOAD);
+    if (frameAt) {
+      this.src = frameAt;
+      this.count = MOBILE_AT_LOAD ? v.frames.mobile : v.frames.desktop;
+      this.frames = new Array(this.count);
+      // Cloudinary makes each frame the first time it is asked for, so allow a moment.
+      if (await Promise.race([this.loadFrame(0), wait(15000).then(() => false)])) {
+        this.mode = 'frames';
+        return;
+      }
+      this.count = 0;
+      this.frames = [];
+      this.requested.clear();
+    }
+    await this.loadVideo(v);
+    // Neither worked (offline, blocked…): fall back to the scene's own art
+    // (drawn laptop or your photo) rather than a black screen.
+    if (this.mode !== 'video') {
+      if (this.painter) {
+        this.mode = 'paint';
+        this.section.classList.remove('has-video');
+      } else {
+        this.mode = 'photo';
+        await this.loadPhoto();
+      }
+    }
+  }
+
+  private loadVideo(v: SceneVideo): Promise<void> {
+    return new Promise((resolve) => {
+      const el = document.createElement('video');
+      let settled = false;
+      const done = (ok: boolean): void => {
+        if (settled) return;
+        settled = true;
+        if (ok) {
+          this.video = el;
+          this.mode = 'video';
+          el.addEventListener('seeked', () => this.onSeeked());
+        } else {
+          this.mode = 'none';
+        }
+        resolve();
+      };
+      el.muted = true;
+      el.playsInline = true;
+      el.preload = 'auto';
+      el.addEventListener('loadeddata', () => done(true), { once: true });
+      el.addEventListener('error', () => done(false), { once: true });
+      window.setTimeout(() => done(false), 20000);
+      el.src = v.url;
+      el.load();
+    });
+  }
+
+  private onSeeked(): void {
+    this.seeking = false;
+    this.drawVideo();
+    const el = this.video;
+    if (el && Math.abs(el.currentTime - this.want) > 0.03) { this.seeking = true; el.currentTime = this.want; }
+  }
+
+  private drawVideo(): void {
+    const el = this.video;
+    if (!el || el.readyState < 2) return;
+    const { width: w, height: h } = this.canvas;
+    const box = this.frameBox(el.videoWidth, el.videoHeight, w, h);
+    this.drawBox(el, box, w, h);
+    this.fadeEdges(box, w, h);
+  }
+
+  /**
+   * Where a video frame goes. Normally it covers the screen. With `inset`
+   * (siteData), it starts smaller, centred just below the nav, and grows to
+   * cover the screen from `fillFrom` onward.
+   */
+  private frameBox(iw: number, ih: number, w: number, h: number): { x: number; y: number; w: number; h: number; full: boolean } {
+    const fill = Math.max(w / iw, h / ih);
+    const inset = this.cfg.video?.inset;
+    if (!inset) return { x: (w - iw * fill) / 2, y: (h - ih * fill) / 2, w: iw * fill, h: ih * fill, full: true };
+    const small = Math.min((h * inset.height) / ih, (w * 0.96) / iw);
+    const grow = easeInOut(clamp((this.p - (inset.fillFrom ?? 1)) / (1 - (inset.fillFrom ?? 1) || 1), 0, 1));
+    const k = lerp(small, fill, grow);
+    const cy = lerp(h * 0.54, h * 0.5, grow); // a little low at first, clear of the nav
+    return { x: (w - iw * k) / 2, y: cy - (ih * k) / 2, w: iw * k, h: ih * k, full: grow >= 1 };
+  }
+
+  private drawBox(src: CanvasImageSource, box: { x: number; y: number; w: number; h: number; full: boolean }, w: number, h: number): void {
+    if (!box.full) { this.ctx.fillStyle = '#07060B'; this.ctx.fillRect(0, 0, w, h); }
+    this.ctx.drawImage(src, box.x, box.y, box.w, box.h);
+  }
+
+  /** Soft edges, so a smaller video melts into the dark page instead of showing its rectangle. */
+  private fadeEdges(box: { x: number; y: number; w: number; h: number; full: boolean }, w: number, h: number): void {
+    if (box.full) return;
+    const { ctx } = this;
+    const f = Math.min(box.w, box.h) * 0.14;
+    const bg = 'rgba(7,6,11,1)', clear = 'rgba(7,6,11,0)';
+    const edge = (x0: number, y0: number, x1: number, y1: number, rx: number, ry: number, rw: number, rh: number): void => {
+      const g = ctx.createLinearGradient(x0, y0, x1, y1);
+      g.addColorStop(0, bg); g.addColorStop(1, clear);
+      ctx.fillStyle = g; ctx.fillRect(rx, ry, rw, rh);
+    };
+    edge(box.x, 0, box.x + f, 0, box.x - 1, 0, f + 1, h);                         // left
+    edge(box.x + box.w, 0, box.x + box.w - f, 0, box.x + box.w - f, 0, f + 1, h); // right
+    edge(0, box.y, 0, box.y + f, 0, box.y - 1, w, f + 1);                         // top
+    edge(0, box.y + box.h, 0, box.y + box.h - f, 0, box.y + box.h - f, w, f + 1); // bottom
+  }
+
   private loadFrame(i: number): Promise<boolean> {
     this.requested.add(i);
     return new Promise((resolve) => {
@@ -187,7 +341,7 @@ class ScrollScene {
       img.decoding = 'async';
       img.onload = () => { this.frames[i] = img; resolve(true); };
       img.onerror = () => resolve(false);
-      img.src = `${this.dir}/${String(i + 1).padStart(4, '0')}.${this.ext}`;
+      img.src = this.src(i);
     });
   }
 
@@ -234,8 +388,9 @@ class ScrollScene {
   }
 
   set(p: number): void {
-    const next = clamp(p, 0, 1);
-    if (next === this.p && this.mode !== 'frames') return;
+    // A video can play over only part of the scroll, then hold its last frame.
+    const next = clamp(p / (this.cfg.video?.scrollShare ?? 1), 0, 1);
+    if (next === this.p && this.mode !== 'frames' && this.mode !== 'video') return;
     this.p = next;
     this.render();
   }
@@ -245,6 +400,18 @@ class ScrollScene {
     const { width: w, height: h } = this.canvas;
 
     if (this.mode === 'none') return;
+    if (this.mode === 'video' && this.video && this.cfg.video) {
+      const v = this.cfg.video;
+      const end = Math.min(v.to, this.video.duration || v.to);
+      this.want = v.from + (end - v.from) * this.p;
+      if (!this.seeking && Math.abs(this.video.currentTime - this.want) > 0.03) {
+        this.seeking = true;
+        this.video.currentTime = this.want;
+      } else if (force) {
+        this.drawVideo();
+      }
+      return;
+    }
     if (this.mode === 'paint' && this.painter) {
       this.painter(ctx, w, h, this.p);
       return;
@@ -257,13 +424,15 @@ class ScrollScene {
       const i = Math.floor(f), t = f - i;
       const a = this.frames[i] || this.nearest(i);
       if (!a) return;
-      cover(ctx, a, a.naturalWidth, a.naturalHeight, w, h, 1, 0.5, 0.5);
+      const box = this.frameBox(a.naturalWidth, a.naturalHeight, w, h);
+      this.drawBox(a, box, w, h);
       const b = this.frames[i] && t > 0.02 ? this.frames[i + 1] : undefined;
       if (b) {
         ctx.globalAlpha = t;
-        cover(ctx, b, b.naturalWidth, b.naturalHeight, w, h, 1, 0.5, 0.5);
+        ctx.drawImage(b, box.x, box.y, box.w, box.h);
         ctx.globalAlpha = 1;
       }
+      this.fadeEdges(box, w, h);
       this.drawn = this.frames[i] ? f : -1;
       return;
     }
@@ -328,17 +497,23 @@ function revealSite(): Promise<void> {
       .to('#preloader', { clipPath: 'inset(0 0 100% 0)', duration: 1.05, ease: 'power4.inOut' }, '-=0.05')
       .from('#heroCanvas', { autoAlpha: 0, duration: 1.4, ease: 'power2.out' }, '<0.2')
       .from('.hero__title .mask__in', { yPercent: 110, duration: 1.2, ease: 'expo.out', stagger: 0.1 }, '<0.2')
-      .from('.hero [data-intro]', { autoAlpha: 0, y: 16, duration: 0.8, ease: 'power3.out', stagger: 0.07 }, '<0.35');
+      .from('.hero [data-intro]', { autoAlpha: 0, y: 16, duration: 0.8, ease: 'power3.out', stagger: 0.07 }, '<0.35')
+      .from('.hero__cue', { autoAlpha: 0, duration: 0.8 }, '<0.2');
   });
 }
 
 /* =======================================================
    4. PINNED SCENES
    ======================================================= */
-function pinScene(scene: ScrollScene, mobile: boolean, onUpdate?: (self: ScrollTrigger) => void): gsap.core.Timeline {
+function pinScene(
+  scene: ScrollScene, mobile: boolean,
+  onUpdate?: (self: ScrollTrigger) => void,
+  onProgress?: (p: number) => void,
+): gsap.core.Timeline {
   const proxy = { p: 0 };
   const { length, videoLength } = scene.cfg;
-  const len = scene.mode === 'frames' && videoLength ? videoLength : length;
+  const filmed = !!scene.cfg.video || scene.mode === 'frames';
+  const len = filmed && videoLength ? videoLength : length;
   const tl = gsap.timeline({
     defaults: { ease: 'none' },
     scrollTrigger: {
@@ -347,15 +522,107 @@ function pinScene(scene: ScrollScene, mobile: boolean, onUpdate?: (self: ScrollT
       pin: true, scrub: 0.8, anticipatePin: 1, invalidateOnRefresh: true, onUpdate,
     },
   });
-  tl.to(proxy, { p: 1, duration: 1, onUpdate: () => scene.set(proxy.p) }, 0);
+  tl.to(proxy, { p: 1, duration: 1, onUpdate: () => { scene.set(proxy.p); onProgress?.(proxy.p); } }, 0);
   scene.set(0);
+  onProgress?.(0);
   return tl;
 }
 
 /** Hero: the text stays put while the camera pushes into the laptop. The nav arrives once the screen fills the view. */
-function heroScene(scene: ScrollScene, mobile: boolean): void {
+/**
+ * Hero. Opens on the closed laptop, small on the horizon. As you scroll, the
+ * camera moves in while the lid opens, and the text lines appear inside the
+ * screen one after another (eyebrow, both headline lines, the sentence, the
+ * buttons). Then the camera pushes into the screen and the text grows with it
+ * until the screen fills the view; the nav arrives at the end.
+ * With SITE.heroTextAtStart, the text starts above the closed laptop instead
+ * and drops into the screen. Returns a cleanup function.
+ */
+function heroScene(scene: ScrollScene, mobile: boolean): () => void {
   const nav = $('#nav');
-  pinScene(scene, mobile, (self) => nav.classList.toggle('is-in', self.progress > 0.72));
+  const copy = $('.hero__copy', scene.section);
+  const lines = $$('.hero__line', copy);
+  const cue = $('.hero__cue', scene.section);
+  const textFirst = SITE.heroTextAtStart;
+  let last = 0;
+  let top = 0, bottom = 0; // the text block's extent, untransformed
+
+  // Each line scales about the centre of the view, so the whole block maps
+  // onto the screen as one picture. offsetLeft/Top ignore transforms.
+  const measure = (): void => {
+    const W = copy.clientWidth, H = copy.clientHeight;
+    top = Infinity; bottom = -Infinity;
+    lines.forEach((el) => {
+      let x = 0, y = 0;
+      for (let n: HTMLElement | null = el; n && n !== copy; n = n.offsetParent as HTMLElement | null) { x += n.offsetLeft; y += n.offsetTop; }
+      el.style.transformOrigin = `${W / 2 - x}px ${H / 2 - y}px`;
+      top = Math.min(top, y); bottom = Math.max(bottom, y + el.offsetHeight);
+    });
+  };
+
+  const place = (p: number): void => {
+    last = p;
+    const W = copy.clientWidth, H = copy.clientHeight;
+    const { screen } = heroGeometry(W, H, p);
+    const pad = 0.08; // keep the text off the screen's edges
+    const k = Math.min(1, (screen.w * (1 - pad * 2)) / W, (screen.h * (1 - pad * 2)) / H);
+    const tx = screen.x + screen.w / 2 - W / 2;
+    const ty = screen.y + screen.h / 2 - H / 2;
+    if (textFirst) {
+      // Start: the block sits above the horizon, shrunk if needed to fit.
+      const target = heroGeometry(W, H, 0).horizon - H * 0.05, roof = H * 0.06;
+      const s0 = Math.min(1, (target - roof) / Math.max(1, bottom - top));
+      const lift = target - (H / 2 + (bottom - H / 2) * s0);
+      lines.forEach((el, i) => {
+        const t = easeInOut(clamp((p - (0.12 + i * 0.025)) / 0.18, 0, 1)); // one after another
+        el.style.transform = `translate(${(tx * t).toFixed(2)}px, ${lerp(lift, ty, t).toFixed(2)}px) scale(${lerp(s0, k, t).toFixed(4)})`;
+        el.style.opacity = '1';
+      });
+    } else {
+      // Each line appears inside the screen in turn, rising a little as it fades in.
+      lines.forEach((el, i) => {
+        const t = easeInOut(clamp((p - (0.2 + i * 0.03)) / 0.1, 0, 1));
+        el.style.transform = `translate(${tx.toFixed(2)}px, ${(ty + (1 - t) * 28 * k).toFixed(2)}px) scale(${k.toFixed(4)})`;
+        el.style.opacity = t.toFixed(3);
+      });
+    }
+    cue.style.opacity = (1 - clamp(p / 0.05, 0, 1)).toFixed(3);
+    nav.classList.toggle('is-in', p > 0.84);
+  };
+
+  measure();
+  pinScene(scene, mobile, undefined, place);
+  const onRefresh = (): void => { measure(); place(last); };
+  ScrollTrigger.addEventListener('refresh', onRefresh);
+  return () => {
+    ScrollTrigger.removeEventListener('refresh', onRefresh);
+    lines.forEach((el) => { el.style.transform = ''; el.style.transformOrigin = ''; el.style.opacity = ''; });
+    cue.style.opacity = '';
+  };
+}
+
+/**
+ * Closing scene with your video (siteData `video` on the cta scene), staged
+ * like the reference: over the first part of the scroll you lift the laptop,
+ * open it and push it toward the camera until the screen fills the view, and
+ * the caption fades in as the laptop opens. Then the full screen blurs and
+ * brightens to a near-white glow, drops to grey with dark edges while the
+ * caption fades, and the scene goes dark before the contact section.
+ */
+function ctaVideoScene(scene: ScrollScene, mobile: boolean): void {
+  const s = scene.section;
+  const screen = $('.scene__canvas', s);
+  const words = $$('.scene__caption > *', s);
+  const end = scene.cfg.video?.scrollShare ?? 0.66; // where the video reaches its last frame
+  pinScene(scene, mobile)
+    .fromTo(words, { autoAlpha: 0, y: 30 }, { autoAlpha: 1, y: 0, duration: 0.12, stagger: 0.04, ease: 'power2.out' }, 0.3)
+    .fromTo(screen,
+      { filter: 'blur(0px) brightness(1) saturate(1)' },
+      { filter: 'blur(30px) brightness(2.6) saturate(0.55)', duration: 0.13, ease: 'power1.in' }, end)
+    .to(screen, { filter: 'blur(34px) brightness(0.62) saturate(0)', duration: 0.1, ease: 'power1.inOut' }, end + 0.14)
+    .fromTo($('.scene__shade', s), { opacity: 0 }, { opacity: 1, duration: 0.1 }, end + 0.14)
+    .to(words, { autoAlpha: 0, duration: 0.08 }, end + 0.18)
+    .to($('.scene__fade', s), { opacity: 1, duration: 0.08 }, 0.92);
 }
 
 function captionScene(scene: ScrollScene, mobile: boolean): void {
@@ -373,8 +640,73 @@ function captionScene(scene: ScrollScene, mobile: boolean): void {
  * the dashboards arrive one by one, the Projects board slides in front, then
  * the caption shows and the scene fades out.
  */
+/**
+ * Second section with your online 360° video (siteData `video`). The video
+ * plays clear across the pin. The six app windows each travel a full circle
+ * around you in step with the camera (the angle measured from your video), so
+ * they sweep round with the room: bigger as they pass the camera's side,
+ * smaller round the back. A window fades out only while it would cover you,
+ * and turns a little to face the camera so it never shows its back. As the
+ * camera comes back to the front, the gallery and launches dashboards swing in
+ * behind the caption while the small windows dim. Then the scene fades out.
+ */
+function orbitVideoScene(scene: ScrollScene, mobile: boolean): void {
+  const s = scene.section;
+  const v = scene.cfg.video as SceneVideo;
+  const wins = $$('.panel:not(.panel--late)', s).filter((el) => getComputedStyle(el).display !== 'none');
+  const faces = wins.map((el) => $('.panel__in', el));
+  const words = $$('.scene__caption > *', s);
+  const turnAt = curve(v.turn ?? [[v.from, 0], [v.to, 360]]);
+  const u = (): number => (mobile
+    ? Math.min(window.innerWidth * 0.022, window.innerHeight * 0.014)
+    : Math.min(window.innerWidth * 0.01, window.innerHeight * 0.018));
+  // In --u units: the circle's size, the scene's depth, and the perspective set in styles.css.
+  const R = mobile ? { x: 16, z: 14 } : { x: 40, z: 30 };
+  const DEPTH = -10;
+  const PERSPECTIVE = 110;
+  // Where each window starts on its circle (--a), its height (--y) and width (--w), from styles.css.
+  const spots = wins.map((el) => {
+    const cs = getComputedStyle(el);
+    const num = (name: string, d: number): number => { const n = parseFloat(cs.getPropertyValue(name)); return Number.isFinite(n) ? n : d; };
+    return { a: num('--a', 0), y: num('--y', 0), w: num('--w', 10) };
+  });
+  gsap.set($('.orbit__world', s), { rotationY: 0, z: 0 });
+
+  const place = (p: number): void => {
+    const U = u();
+    // Negative, so windows behind you travel the same way as the room in the video.
+    const turn = -turnAt(v.from + (v.to - v.from) * p);
+    const dim = 1 - 0.62 * smooth(0.64, 0.72, p);
+    wins.forEach((el, i) => {
+      const { a, y, w } = spots[i];
+      const ang = ((((a + turn) % 360) + 540) % 360) - 180; // -180…180, 0 = between you and the camera
+      const r = (ang * Math.PI) / 180;
+      const x = R.x * Math.sin(r), z = R.z * Math.cos(r) + DEPTH;
+      // Fade while the window would sit over you (head is narrower than shoulders).
+      const k = PERSPECTIVE / (PERSPECTIVE - z);
+      const gap = Math.abs(x) * k - (w / 2) * k - (y < -14 ? 8 : 15);
+      const overYou = mobile && Math.abs(y) > 28 ? false : true;
+      const clear = overYou ? smooth(0, 5, gap) : 1;
+      el.style.transform = `translate(-50%, -50%) translate3d(${(x * U).toFixed(1)}px, ${(y * U).toFixed(1)}px, ${(z * U).toFixed(1)}px) rotateY(${(-ang * 0.35).toFixed(2)}deg)`;
+      faces[i].style.opacity = (clear * dim).toFixed(3);
+    });
+  };
+
+  pinScene(scene, mobile, undefined, place)
+    .fromTo($('.p-gallery > .panel__in', s),
+      { autoAlpha: 0, x: () => u() * 14, rotationY: 40 },
+      { autoAlpha: 1, x: 0, rotationY: 0, duration: 0.14, ease: 'power2.out' }, 0.64)
+    .fromTo($('.p-cards > .panel__in', s),
+      { autoAlpha: 0, x: () => -u() * 10, rotationY: -34 },
+      { autoAlpha: 1, x: 0, rotationY: 0, duration: 0.14, ease: 'power2.out' }, 0.69)
+    .fromTo(words, { autoAlpha: 0, y: 50 }, { autoAlpha: 1, y: 0, duration: 0.1, stagger: 0.04, ease: 'power2.out' }, 0.72)
+    .to(words, { autoAlpha: 0, y: -50, duration: 0.07, stagger: 0.03, ease: 'power2.in' }, 0.9)
+    .to($('.scene__fade', s), { opacity: 1, duration: 0.06 }, 0.93);
+}
+
 function orbitScene(scene: ScrollScene, mobile: boolean): void {
   const s = scene.section;
+  if (scene.cfg.video) { orbitVideoScene(scene, mobile); return; }
   if (scene.mode === 'frames') {
     // A Higgsfield 360° orbit plays across the whole pin (the 3D photo and
     // dashboards are hidden by CSS); the caption lands as the camera comes
@@ -390,8 +722,8 @@ function orbitScene(scene: ScrollScene, mobile: boolean): void {
     return;
   }
   const world = $('.orbit__world', s);
-  const panels = $$('.panel__in', s).filter((el) => !el.closest('.p-projects'));
-  const board = $('.p-projects .panel__in', s);
+  const panels = $$('.panel:not(.panel--late) > .panel__in', s);
+  const board = $$('.panel--late > .panel__in', s);
   const parts = $$('.scene__caption > *', s);
   // Same unit as --u in styles.css, so depths scale with the screen.
   const u = (): number => (mobile
@@ -425,7 +757,7 @@ function orbitScene(scene: ScrollScene, mobile: boolean): void {
 }
 
 function staticScenes(scenes: ScrollScene[]): void {
-  scenes.forEach((s, i) => s.set(i === 2 ? 0.5 : 0.15)); // the closing laptop is shown open
+  scenes.forEach((s, i) => s.set(i === 0 ? 1 : i === 2 ? 0.5 : 0.15)); // hero: screen fills the view; closing laptop: open
   gsap.set('.orbit__world', { rotationY: -6, z: -45 * Math.min(window.innerWidth * 0.01, window.innerHeight * 0.018) });
   const img = document.querySelector<HTMLImageElement>('.orbit__photo img');
   const fit = (): void => { if (img?.naturalWidth) img.parentElement?.style.setProperty('--ar', String(img.naturalWidth / img.naturalHeight)); };
@@ -445,8 +777,11 @@ function initStats(): void {
     onEnter: () => {
       vals.forEach((v, i) => {
         const o = { n: 0 };
-        gsap.to(o, { n: Number(v.dataset.count), duration: 1.6, delay: i * 0.1, ease: 'power3.out',
-          onUpdate: () => { v.textContent = String(Math.round(o.n)); } });
+        const target = Number(v.dataset.count);
+        const places = Number.isInteger(target) ? 0 : 1; // 3.5 counts up as 0.0 … 3.5
+        gsap.to(o, { n: target, duration: 1.6, delay: i * 0.1, ease: 'power3.out',
+          onUpdate: () => { v.textContent = o.n.toFixed(places); },
+          onComplete: () => { v.textContent = String(target); } });
       });
       gsap.from('.stat', { y: 30, autoAlpha: 0, duration: 1, ease: 'expo.out', stagger: 0.08 });
     },
@@ -469,7 +804,7 @@ function missionScene(mobile: boolean): () => void {
 
 function initReveals(): void {
   if (REDUCED) return;
-  [['.work__head > *', '.work__head'], ['.contact__inner > *', '.contact']].forEach(([items, trigger]) => {
+  [['.work__head > *', '.work__head'], ['.contact__inner > *', '.contact'], ['#motion .showcase__head > *', '#motion'], ['.showcase--reels .showcase__head > *', '.showcase--reels']].forEach(([items, trigger]) => {
     gsap.from(items, {
       y: 40, autoAlpha: 0, duration: 1.1, ease: 'expo.out', stagger: 0.07,
       scrollTrigger: { trigger, start: 'top 78%', once: true },
@@ -504,7 +839,7 @@ function initCursor(): void {
   }, { passive: true });
   on(document, 'pointerover', (e) => {
     const t = e.target as HTMLElement;
-    ring.classList.toggle('is-link', !!t.closest?.('a, button, label, input, textarea, .card'));
+    ring.classList.toggle('is-link', !!t.closest?.('a, button, label, input, textarea, .card, .prism-carousel__card, .depth-carousel__card'));
   });
   on(document, 'mouseleave', () => ring.classList.remove('is-on'));
 }
@@ -607,6 +942,8 @@ function initPile(mobile: boolean): () => void {
    7. PROJECT MODAL
    ======================================================= */
 const MODAL: { index: number; origin: HTMLElement | null } = { index: 0, origin: null };
+/** Re-checks how the popup's image should sit, once the popup has a size. */
+let refitShot: () => void = () => {};
 
 function fillModal(p: ResolvedProject): void {
   $('#mCat').textContent = p.category;
@@ -619,10 +956,21 @@ function fillModal(p: ResolvedProject): void {
   const view = $('#mView');
   view.scrollTop = 0;
   view.innerHTML = '';
+  view.classList.remove('is-short');
   const img = new Image();
   img.className = 'modal__shot';
-  img.alt = `Full-page screenshot of ${p.name}`;
+  img.alt = `Screenshot of ${p.name}`;
   img.decoding = 'async';
+  // A tall full-page screenshot scrolls; a shorter image (like a 16:9 hero) shows
+  // whole and centred, over a blurred, darkened copy of itself.
+  const fit = (): void => {
+    if (!img.naturalWidth || !view.clientWidth) return; // not loaded, or the popup isn't showing yet
+    const short = img.naturalHeight / img.naturalWidth < view.clientHeight / view.clientWidth;
+    view.classList.toggle('is-short', short);
+    if (short) view.style.setProperty('--shot', `url("${p.full}")`);
+  };
+  refitShot = fit;
+  img.onload = fit;
   img.onerror = () => { view.innerHTML = `<div class="modal__empty" style="--c:${p.color}"><span>${esc(p.name)}</span></div>`; };
   img.src = p.full;
   view.appendChild(img);
@@ -653,6 +1001,7 @@ function openModal(i: number, origin: HTMLElement): void {
   MODAL.origin = origin;
   fillModal(PROJECTS[i]);
   modal.hidden = false;
+  requestAnimationFrame(() => refitShot());
   lenis?.stop();
   document.addEventListener('keydown', modalKeys);
   if (!REDUCED) {
@@ -842,10 +1191,10 @@ export function initSite(): () => void {
       if (REDUCED) {
         staticScenes(scenes);
       } else {
-        heroScene(hero, mobile);
+        cleanups.push(heroScene(hero, mobile));
         cleanups.push(missionScene(mobile));
         orbitScene(rest[0], mobile);
-        captionScene(rest[1], mobile);
+        if (rest[1].cfg.video) ctaVideoScene(rest[1], mobile); else captionScene(rest[1], mobile);
       }
       cleanups.push(initPile(mobile));
       requestAnimationFrame(() => ScrollTrigger.refresh());
