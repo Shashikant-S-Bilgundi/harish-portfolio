@@ -282,8 +282,6 @@ const resolveVideos = (list: ShowcaseVideo[], width: number): ResolvedShowcaseVi
 // Titles come from the file names. [CONFIRM] Edit the titles and captions as you like;
 // posterAt picks the second the side cards' still is taken from (default 1).
 export const FILMS = resolveVideos([
-  { title: 'Soda juice ad', caption: 'Product ad',
-    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611526/Soda_Juice_Ad_1_iwwuhq.mp4' },
   { title: 'SkyUp: all services', caption: 'Services video for SkyUp Digital Solutions',
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611597/Skyup_All_Service_owbjlq.mp4' },
   { title: 'Product sale promo', caption: 'Promo video',
@@ -292,17 +290,19 @@ export const FILMS = resolveVideos([
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611682/Perfume_Animation_Video_jaa9qb.mp4' },
   { title: 'Food animation', caption: 'Motion graphics',
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611726/Food_Animation_Video_qsb7wm.mp4' },
+  { title: 'Soda juice ad', caption: 'Product ad',
+    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611526/Soda_Juice_Ad_1_iwwuhq.mp4' },
 ], 1280);
 
 export const REELS = resolveVideos([
-  { title: 'Website development', caption: 'Service reel',
-    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611828/Website_Development_josrli.mp4' },
+   { title: 'Roll Task', caption: 'Reel',
+    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611975/Roll_Task_iknpq6.mp4' },
   { title: 'Website ad', caption: 'Ad reel',
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611866/Website_Ad_1_qg55t9.mp4' },
-  { title: 'Roll Task', caption: 'Reel',
-    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611975/Roll_Task_iknpq6.mp4' },
   { title: 'AI podcast', caption: 'Video editing service',
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793612025/Ai_Podcast_-_Video_Editing_Service_kwdxwn.mp4' },
   { title: 'Video editing service', caption: 'Service reel',
     video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793612064/Video_Editing_Service_Video_krpfwo.mp4' },
+  { title: 'Website development', caption: 'Service reel',
+    video: 'https://res.cloudinary.com/dmyj1echa/video/upload/v1793611828/Website_Development_josrli.mp4' },
 ], 720);
